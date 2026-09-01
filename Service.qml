@@ -161,11 +161,17 @@ Item {
   property bool _autoAttempt: false
 
   readonly property bool autoReady: installed && signedIn && accountProbed && stateLoaded && autoConnect
-  readonly property string stateDir: (Quickshell.env("XDG_STATE_HOME") || (Quickshell.env("HOME") + "/.local/state")) + "/vibe-protonvpn"
+  readonly property bool plusPlan: Model.planIsPaid(plan)
+  readonly property string stateDir: (Quickshell.env("XDG_STATE_HOME") || (Quickshell.env("HOME") + "/.local/state")) + "/iamfitsum-proton-vpn"
+  readonly property string legacyStateDir: (Quickshell.env("XDG_STATE_HOME") || (Quickshell.env("HOME") + "/.local/state")) + "/vibe-protonvpn"
   readonly property string statePath: stateDir + "/state.json"
 
   readonly property string scriptPath: Qt.resolvedUrl("servers.py").toString().replace(/^file:\/\//, "")
+  readonly property string changePath: Qt.resolvedUrl("change.py").toString().replace(/^file:\/\//, "")
   readonly property string appsScriptPath: Qt.resolvedUrl("apps.py").toString().replace(/^file:\/\//, "")
+  readonly property string sanitizePath: Qt.resolvedUrl("sanitize_keyring.py").toString().replace(/^file:\/\//, "")
+  property real _lastPersistMs: 0
+  property var _pendingSplitApps: []
 
   property string actionStatus: ""
   property string lastError: ""
@@ -173,6 +179,15 @@ Item {
 
   // -1 = follow reality; 0/1 = a requested state still catching up.
   property int _desired: -1
+  // Change server is already connected: reconcile must not treat "still up"
+  // as done, or the panel snaps back to the old name mid-hop.
+  property bool _changingServer: false
+  // Server name when the hop started. Cleared only when nmcli shows a
+  // different live tunnel (or a down→up), not while the old profile is still up.
+  property string _changeFromServer: ""
+  // Manual disconnect while Always On: stay down until the user connects
+  // again. Drops, boot, and kill-switch cycling still reconnect.
+  property bool _autoHold: false
   // Set when we asked for the tunnel to go down, so the drop isn't reported
   // as a failure.
   property bool _expectDown: false
@@ -243,7 +258,7 @@ Item {
   // signedIn is unknown until the first probe returns.
   readonly property string displayStatus: {
     if (!installed) return "Not installed"
-    if (busy && pendingLabel !== "") return pendingLabel
+    if (pendingLabel !== "") return pendingLabel
     if (connected) return "Protected"
     if (statusConnecting) return "Connecting…"
     if (!accountProbed) return "Checking…"
@@ -450,7 +465,7 @@ Item {
     if (splitBlocked) return "Turn the Kill Switch off to use this"
     if (splitError !== "") return splitError
     if (!splitOn) return "Keep chosen apps off the VPN"
-    var n = splitApps.length
+    var n = Model.collapseSplitPaths(splitApps).length
     if (n === 0) return "No apps chosen yet"
     if (splitMode === "include")
       return n === 1 ? "Only 1 app uses the VPN" : "Only " + n + " apps use the VPN"
@@ -542,8 +557,12 @@ Item {
       seen[p] = true
       clean.push(p)
     }
-    var mode = splitMode
-    writeSplit(function(st) { st["config_by_mode"][mode]["app_paths"] = clean })
+    _pendingSplitApps = clean
+    var cmd = ["python3", appsScriptPath, "--expand"]
+    for (var i = 0; i < clean.length; i++) cmd.push(clean[i])
+    if (expandSplitProcess.running) expandSplitProcess.running = false
+    expandSplitProcess.command = cmd
+    expandSplitProcess.running = true
   }
 
   // Proton refuses a kill switch change while a tunnel is up: `config set
@@ -639,25 +658,79 @@ Item {
   property bool p2pRequested: false
   readonly property bool currentP2p: !!(currentPlace && currentPlace.p2p === true)
 
+  /**
+   * A connect that starts while a tunnel is already up is a hop, not a
+   * first connect. Pin the current name so nmcli cannot treat the old
+   * profile as "done".
+   */
+  function markChanging() {
+    _changingServer = true
+    _changeFromServer = displayServer || ""
+    _expectDown = true
+  }
+
+  function clearChanging() {
+    _changingServer = false
+    _changeFromServer = ""
+    _expectDown = false
+  }
+
   function connectTo(args, label, target, auto) {
     if (!installed || !signedIn || busy) return
+    args = args || []
+    var named = args.length === 1 && connectArg.test(args[0]) && args[0].charAt(0) !== "-"
+    var viaApi = !plusPlan && named
     p2pRequested = args.indexOf("--p2p") !== -1
     _autoAttempt = auto === true
+    _autoHold = false
+    if (linkActive || statusConnected) root.markChanging()
+    else root.clearChanging()
     _desired = 1
-    _expectDown = false
     _target = target
     pendingLabel = label || "Connecting…"
     actionStatus = pendingLabel
     lastError = ""
-    connectProcess.command = ["protonvpn", "connect"].concat(args || [])
+    connectProcess.command = viaApi
+      ? ["python3", changePath, "--to", args[0]]
+      : ["protonvpn", "connect"].concat(args || [])
     connectProcess.running = true
   }
 
   function connectFastest() { connectTo([], "Connecting to fastest…", null) }
-  function connectRandom() { connectTo(["--random"], "Connecting to a random server…", null) }
+  function connectRandom() { hopRandom("Connecting to a random server…") }
   function connectP2P() { connectTo(["--p2p"], "Connecting to fastest P2P…", null) }
   function connectSecureCore() { connectTo(["--securecore"], "Connecting via Secure Core…", null) }
   function connectTor() { connectTo(["--tor"], "Connecting via Tor…", null) }
+
+  /**
+   * Shuffle to another in-tier server via change.py.
+   * Free-plan CLI cannot `--random` or connect by name.
+   */
+  function hopRandom(label) {
+    if (!installed || !signedIn || busy) return
+    p2pRequested = false
+    _autoAttempt = false
+    _autoHold = false
+    if (linkActive || statusConnected) root.markChanging()
+    else root.clearChanging()
+    _desired = 1
+    _target = null
+    pendingLabel = label || "Changing server…"
+    actionStatus = pendingLabel
+    lastError = ""
+    var cmd = ["python3", changePath, "--current", displayServer || ""]
+    if (!plusPlan) cmd.push("--free")
+    connectProcess.command = cmd
+    connectProcess.running = true
+  }
+
+  /**
+   * Switch to another server while already connected.
+   */
+  function changeServer() {
+    if (!connected) return
+    hopRandom("Changing server…")
+  }
 
   function connectCountry(code, name) {
     var c = String(code || "").trim().toUpperCase()
@@ -736,6 +809,8 @@ Item {
 
   function disconnect() {
     if (!installed || busy) return
+    if (!_ksCycle) _autoHold = true
+    root.clearChanging()
     _desired = 0
     _expectDown = true
     trafficReset()
@@ -764,6 +839,16 @@ Item {
     Quickshell.execDetached(["omarchy-launch-floating-terminal-with-presentation", cmd])
     signInWatch.restart()
     return true
+  }
+
+  // Proton writes JSON+PEM with literal newlines into Omarchy's passwordless
+  // INI keyring. gnome-keyring then rejects the file on the next boot. Fold
+  // those newlines and pin the default alias; do not restart the daemon.
+  function persistSession(force) {
+    var now = Date.now()
+    if (!force && now - _lastPersistMs < 60000) return
+    _lastPersistMs = now
+    Quickshell.execDetached(["python3", sanitizePath, "--persist"])
   }
 
   function signOut() {
@@ -851,6 +936,10 @@ Item {
 
   function applyStatus(raw) {
     var parsed = Model.parseStatus(raw)
+    // A probe that overlapped an action still reports the previous tunnel.
+    // Applying it is what flashes Protected / Not protected mid-hop.
+    if (_desired === 1 && !parsed.connected) return
+    if (_desired === 0 && parsed.connected) return
     statusConnected = parsed.connected
     statusConnecting = parsed.connecting
     statusText = parsed.statusText
@@ -881,6 +970,7 @@ Item {
   // flashes "Not protected" over a connect that is succeeding.
   function reconcile() {
     if (_desired === -1) return
+    if (_changingServer) return
     var real = linkActive || statusConnected
     if (real === (_desired === 1)) {
       _desired = -1
@@ -896,6 +986,7 @@ Item {
     // connect needs to settle, so this can never cause a flash.
     if (!busy && _actionEndedMs > 0 && Date.now() - _actionEndedMs > 15000) {
       _desired = -1
+      root.clearChanging()
       pendingLabel = ""
     }
   }
@@ -945,6 +1036,7 @@ Item {
   function toggleAutoConnect() {
     autoConnect = !autoConnect
     _autoNextMs = 0
+    if (autoConnect) _autoHold = false
     saveState()
     autoReconcile()
   }
@@ -960,6 +1052,7 @@ Item {
     // itself. Always On stepping in here is what made this impossible to do
     // by hand in the first place.
     if (_ksCycle) return
+    if (_autoHold) return
     if (connected || linkActive || busy) return
     if (_autoNextMs > 0 && Date.now() < _autoNextMs) return
     var t = recents.length > 0 && Array.isArray(recents[0].args) ? recents[0] : null
@@ -981,6 +1074,8 @@ Item {
     // Owner-only, and fixed up on existing installs too: the file holds where
     // you've been connecting, which is nobody else's business on a shared box.
     Quickshell.execDetached(["install", "-d", "-m", "700", stateDir])
+    Quickshell.execDetached(["cp", "-n", legacyStateDir + "/state.json", statePath])
+    persistSession(true)
     refresh()
   }
 
@@ -1216,6 +1311,10 @@ Item {
     stdout: StdioCollector { id: watchStdout; waitForEnd: true }
     onExited: function(exitCode) {
       if (exitCode !== 0) return
+      if (root._actionEndedMs > 0 && root._watchStartedMs < root._actionEndedMs) {
+        root.watchLink()
+        return
+      }
       var link = Model.parseActiveVpn(String(watchStdout.text || ""))
       var was = root.linkActive
       root.linkActive = link.active
@@ -1235,9 +1334,15 @@ Item {
       // this guard that lands as "You're no longer protected" in the middle
       // of a connect the person just asked for.
       if (was && !link.active) {
-        if (!root._expectDown && !actionProcess.running && !connectProcess.running)
+        if (!root._expectDown && !root._changingServer
+            && !actionProcess.running && !connectProcess.running)
           root.notify("VPN Disconnected \udb83\udfc6", "You're no longer protected.", "critical")
-        root._expectDown = false
+        if (!root._changingServer) root._expectDown = false
+      }
+      if (link.active && root._changingServer && !connectProcess.running) {
+        var swapped = link.server !== "" && root._changeFromServer !== ""
+                      && link.server !== root._changeFromServer
+        if (swapped || !was) root.clearChanging()
       }
       root.reconcile()
       root.autoReconcile()
@@ -1285,9 +1390,12 @@ Item {
       root.signedIn = info.signedIn
       root.account = info.account
       root.plan = info.plan
-      if (info.signedIn && !was) {
-        root.loadCountries(true)
-        root.loadConfig()
+      if (info.signedIn) {
+        root.persistSession(!was)
+        if (!was) {
+          root.loadCountries(true)
+          root.loadConfig()
+        }
       }
       if (!info.signedIn) {
         root.countries = []
@@ -1395,6 +1503,26 @@ Item {
   }
 
   Process {
+    id: expandSplitProcess
+    running: false
+    command: []
+    stdout: StdioCollector { id: expandSplitStdout; waitForEnd: true }
+    onExited: function(exitCode) {
+      var expanded = root._pendingSplitApps
+      if (exitCode === 0) {
+        try {
+          var parsed = JSON.parse(String(expandSplitStdout.text || "[]"))
+          if (parsed && typeof parsed.length === "number") expanded = parsed
+        } catch (e) {
+          expanded = root._pendingSplitApps
+        }
+      }
+      var mode = root.splitMode
+      root.writeSplit(function(st) { st["config_by_mode"][mode]["app_paths"] = expanded })
+    }
+  }
+
+  Process {
     id: countriesProcess
     running: false
     command: []
@@ -1423,12 +1551,13 @@ Item {
       var wasAuto = root._autoAttempt
       root._target = null
       root._autoAttempt = false
-      root.pendingLabel = ""
       root._autoNextMs = wasAuto && exitCode !== 0 ? Date.now() + root.autoRetryMs : 0
       if (exitCode === 0) root._autoPinFailed = false
       else if (wasAuto) root._autoPinFailed = true
       if (exitCode !== 0) {
         root._desired = -1
+        root.clearChanging()
+        root.pendingLabel = ""
         var text = err || out || "Connect failed"
         root.lastError = Model.isPlanError(text) ? "Requires a Proton VPN Plus plan" : Model.elide(text)
         root.actionStatus = root.lastError
@@ -1480,8 +1609,8 @@ Item {
       root._actionEndedMs = Date.now()
       var out = String(actionStdout.text || "")
       var err = String(actionStderr.text || "")
-      root.pendingLabel = ""
       if (exitCode !== 0) {
+        root.pendingLabel = ""
         root._desired = -1
         root._expectDown = false
         root.lastError = Model.elide(err || out || "Command failed")

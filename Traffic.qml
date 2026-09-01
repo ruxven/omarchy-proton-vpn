@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Shapes
 import qs.Commons
+import "Model.js" as Model
 
 // Tunnel throughput: two rates, a 60-second sparkline, session totals.
 //
@@ -22,8 +23,9 @@ Item {
   property int uptimeSec: 0
 
   property color foreground: Color.foreground
+  property color background: Color.background
   property string fontFamily: Style.font.family
-  readonly property color dim: Qt.darker(foreground, 1.55)
+  readonly property color dim: Model.mixInk(foreground, background, 0.55)
 
   readonly property int samples: 60
   readonly property real chartHeight: Style.space(36)
@@ -107,7 +109,7 @@ Item {
             antialiasing: true
             preferredRendererType: Shape.CurveRenderer
             ShapePath {
-              fillColor: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.22)
+              fillColor: Model.washInk(root.foreground, root.background, 0.22)
               strokeColor: "transparent"; strokeWidth: 0
               PathSvg { path: "M0 10 L0 7 Q3.5 6 5.5 3 Q7.5 0 9.5 4 Q11.5 8 14 5 L14 10 Z" }
             }
@@ -157,7 +159,7 @@ Item {
       Rectangle {
         anchors.bottom: parent.bottom
         width: parent.width; height: 1
-        color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.18)
+        color: Model.washInk(root.foreground, root.background, 0.18)
       }
 
       Shape {
@@ -167,7 +169,7 @@ Item {
 
         // Download: filled area + 2px line
         ShapePath {
-          fillColor: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.16)
+          fillColor: Model.washInk(root.foreground, root.background, 0.16)
           strokeColor: "transparent"
           strokeWidth: 0
           PathSvg { path: root.areaPath(root.rxHistory, chart.width, chart.height) }
@@ -183,7 +185,7 @@ Item {
         // Upload: dashed 2px line, foreground
         ShapePath {
           fillColor: "transparent"
-          strokeColor: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.7)
+          strokeColor: Model.washInk(root.foreground, root.background, 0.7)
           strokeWidth: 2
           strokeStyle: ShapePath.DashLine
           dashPattern: [2.5, 2]
@@ -212,7 +214,7 @@ Item {
         visible: root.hoverIndex >= 0
         width: 1; height: parent.height
         x: root.xAt(root.samples - root.rxHistory.length + root.hoverIndex, root.samples, chart.width)
-        color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.45)
+        color: Model.washInk(root.foreground, root.background, 0.45)
       }
     }
 

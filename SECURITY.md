@@ -10,13 +10,15 @@ plugin. It:
 - never asks for root; CLI install uses Omarchy's installer terminal
 - runs commands as argv lists, except the sign-in username which is
   allow-listed and single-quoted before it reaches the terminal launcher
-- writes `~/.local/state/vibe-protonvpn/` (recents, Always On, nudge) and,
+- writes `~/.local/state/iamfitsum-proton-vpn/` (recents, Always On, nudge) and,
   only if you change split tunneling, `features.split_tunneling` in
   Proton's `~/.config/Proton/VPN/settings.json`
 
 Kill Switch / NetShield / port forwarding only ever pass allow-listed
 keys and values to `protonvpn config set`.
 
-`extras/install-session.sh` additionally installs a gnome-keyring drop-in
-so Proton's session survives reboot on Omarchy. That is optional, local,
-and not part of `omarchy plugin add`.
+After sign-in the plugin rewrites `~/.local/share/keyrings/Default_keyring.keyring`
+in place (fold Proton's literal newlines into GKeyFile `\\n`) and pins the
+`default` alias file to that store. It does not restart gnome-keyring or
+touch Hypr/Omarchy/systemd config.
+

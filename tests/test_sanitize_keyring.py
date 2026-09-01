@@ -3,14 +3,20 @@
 
 from __future__ import annotations
 
+import os
+import stat
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "extras"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from sanitize_keyring import sanitize_keyring_file, sanitize_keyring_text  # noqa: E402
+from sanitize_keyring import (  # noqa: E402
+    persist_session,
+    sanitize_keyring_file,
+    sanitize_keyring_text,
+)
 
 
 CORRUPT = """[keyring]
@@ -76,6 +82,51 @@ class SanitizeKeyringTests(unittest.TestCase):
             body = path.read_text(encoding="utf-8")
             self.assertIn("\\nMCow", body)
             self.assertNotIn("\nMCow", body)
+
+    def test_persist_noop_without_ini(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            keyring_dir = Path(tmp) / "keyrings"
+            keyring_dir.mkdir()
+            os.environ["PROTONVPN_KEYRING_DIR"] = str(keyring_dir)
+            try:
+                self.assertFalse(persist_session())
+            finally:
+                del os.environ["PROTONVPN_KEYRING_DIR"]
+            self.assertFalse((keyring_dir / "default").exists())
+            self.assertFalse((keyring_dir / "Default_keyring.keyring").exists())
+
+    def test_persist_folds_ini_and_pins_alias(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            keyring_dir = Path(tmp) / "keyrings"
+            keyring_dir.mkdir()
+            ini = keyring_dir / "Default_keyring.keyring"
+            ini.write_text(CORRUPT, encoding="utf-8")
+            (keyring_dir / "default").write_text("Default\n", encoding="utf-8")
+            os.environ["PROTONVPN_KEYRING_DIR"] = str(keyring_dir)
+            try:
+                self.assertTrue(persist_session())
+                self.assertFalse(persist_session())
+            finally:
+                del os.environ["PROTONVPN_KEYRING_DIR"]
+            body = ini.read_text(encoding="utf-8")
+            self.assertIn("\\nMCow", body)
+            self.assertNotIn("\nMCow", body)
+            self.assertEqual((keyring_dir / "default").read_text(encoding="utf-8"), "Default_keyring\n")
+            self.assertEqual(stat.S_IMODE(ini.stat().st_mode), 0o600)
+
+    def test_persist_skips_encrypted_keyring(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            keyring_dir = Path(tmp) / "keyrings"
+            keyring_dir.mkdir()
+            ini = keyring_dir / "Default_keyring.keyring"
+            ini.write_text("GKR\x00encrypted", encoding="latin-1")
+            os.environ["PROTONVPN_KEYRING_DIR"] = str(keyring_dir)
+            try:
+                self.assertFalse(persist_session())
+            finally:
+                del os.environ["PROTONVPN_KEYRING_DIR"]
+            self.assertEqual(ini.read_text(encoding="latin-1"), "GKR\x00encrypted")
+            self.assertFalse((keyring_dir / "default").exists())
 
 
 if __name__ == "__main__":

@@ -1,9 +1,9 @@
 {
   "schemaVersion": 1,
-  "id": "io.github.vibe.protonvpn",
+  "id": "io.github.iamfitsum.omarchy-proton-vpn",
   "name": "Proton VPN",
   "version": "1.0.0",
-  "author": "vibe",
+  "author": "Iamfitsum",
   "license": "MIT",
   "description": "Proton VPN for the Omarchy bar: map, country/city picker, Kill Switch, NetShield, Always On, and split tunneling.",
   "kinds": [

@@ -114,7 +114,13 @@ def program_of(exec_line):
 
 
 def resolve(program):
-    """Absolute path to an executable file, or None."""
+    """Return (exec_path, realpath) after safety checks, or None.
+
+    Proton's eBPF matcher sees the path passed to execve (often a /usr/bin
+    symlink). The psutil scan at config-push time sees the realpath. Both
+    have to land in app_paths or Electron apps launched through a symlink
+    miss the tunnel exclusion.
+    """
     if program.startswith("/"):
         candidate = program
     else:
@@ -128,14 +134,17 @@ def resolve(program):
                 break
     if not candidate:
         return None
-    candidate = os.path.realpath(candidate)
-    if not os.path.isfile(candidate) or not os.access(candidate, os.X_OK):
+    try:
+        real = os.path.realpath(candidate)
+    except OSError:
+        return None
+    if not os.path.isfile(real) or not os.access(real, os.X_OK):
         return None
     # A program that runs as another user is a wrapper around the real app,
     # and a prefix match on it would catch everything launched through it.
-    if os.stat(candidate).st_mode & (stat.S_ISUID | stat.S_ISGID):
+    if os.stat(real).st_mode & (stat.S_ISUID | stat.S_ISGID):
         return None
-    return candidate
+    return candidate, real
 
 
 def collect():
@@ -159,20 +168,56 @@ def collect():
             program = program_of(exec_line)
             if not program:
                 continue
-            path = resolve(program)
-            if not path:
+            resolved = resolve(program)
+            if not resolved:
                 continue
-            # Several entries can share one binary; the shortest name is
-            # nearly always the app itself rather than a variant of it.
-            if path not in by_path or len(name) < len(by_path[path]):
-                by_path[path] = name
+            candidate, real = resolved
+            # Dedupe on the real binary; keep the PATH-resolved path as the
+            # picker value because that is what execve sees.
+            if real not in by_path or len(name) < len(by_path[real]["name"]):
+                by_path[real] = {"name": name, "value": candidate, "real": real}
     return by_path
 
 
+def expand_paths(paths):
+    """Add the realpath of each selected app when it differs from the picker path."""
+    out = []
+    seen = set()
+
+    def add(path):
+        if path not in seen:
+            seen.add(path)
+            out.append(path)
+
+    for raw in paths:
+        path = str(raw)
+        if not path.startswith("/") or "\0" in path:
+            continue
+        add(path)
+        try:
+            real = os.path.realpath(path)
+        except OSError:
+            continue
+        if real == path or not os.path.isfile(real) or not os.access(real, os.X_OK):
+            continue
+        if os.stat(real).st_mode & (stat.S_ISUID | stat.S_ISGID):
+            continue
+        add(real)
+    return out
+
+
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "--expand":
+        json.dump(expand_paths(sys.argv[2:]), sys.stdout, separators=(",", ":"))
+        return
     by_path = collect()
-    apps = [{"value": path, "label": name, "description": path}
-            for path, name in by_path.items()]
+    apps = []
+    for info in by_path.values():
+        apps.append({
+            "value": info["value"],
+            "label": info["name"],
+            "description": info["real"] if info["real"] != info["value"] else info["value"],
+        })
     apps.sort(key=lambda a: (a["label"].lower(), a["value"]))
     json.dump(apps, sys.stdout, separators=(",", ":"))
 

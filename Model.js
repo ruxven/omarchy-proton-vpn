@@ -285,3 +285,85 @@ function shellQuote(text) {
 function isPlanError(text) {
   return /upgrade|plus plan|paid plan|subscription|not available (?:on|for|with) (?:your|the free|free)|free (?:plan|tier|users?)/i.test(String(text || ""))
 }
+
+/**
+ * Return true when protonvpn info's Plan is a paid tier.
+ * Empty/unknown is treated as free so PLUS badges still show.
+ */
+function planIsPaid(plan) {
+  var p = String(plan || "").toLowerCase()
+  return /plus|visionary|unlimited|business|family|\bduo\b/.test(p)
+}
+
+/**
+ * Mix foreground toward background. Dims on dark themes and lightens on
+ * light ones, unlike Qt.darker which always goes toward black.
+ */
+function mixInk(fg, bg, t) {
+  var a = (t === undefined || t === null) ? 0.55 : t
+  return Qt.rgba(
+    fg.r + (bg.r - fg.r) * a,
+    fg.g + (bg.g - fg.g) * a,
+    fg.b + (bg.b - fg.b) * a,
+    1
+  )
+}
+
+/**
+ * Foreground-as-fill with alpha. Light backgrounds get a stronger wash so
+ * the map and traffic graph stay visible.
+ */
+function washInk(fg, bg, alpha) {
+  var lum = 0.299 * bg.r + 0.587 * bg.g + 0.114 * bg.b
+  var a = lum > 0.5 ? Math.min(0.55, Number(alpha) * 2.6) : Number(alpha)
+  return Qt.rgba(fg.r, fg.g, fg.b, a)
+}
+
+/**
+ * True when this country has no free-tier city in the local server cache.
+ * Unknown (cache empty / country not in it) is false so we don't badge
+ * everything PLUS before the map data lands.
+ */
+function countryNeedsPlus(code, cities, paid) {
+  if (paid) return false
+  var want = String(code || "").toUpperCase()
+  if (want === "") return false
+  var listed = cities && typeof cities.length === "number" && cities.length > 0
+  if (listed) {
+    var saw = false
+    for (var i = 0; i < cities.length; i++) {
+      var row = cities[i]
+      if (String(row.code || "").toUpperCase() !== want) continue
+      saw = true
+      if (row.free === true || Number(row.tier) === 0) return false
+    }
+    if (saw) return true
+  }
+  return ["US", "NL", "JP"].indexOf(want) === -1
+}
+
+/**
+ * Drop realpath partners so the app picker shows one row per app.
+ * The longer path is the resolved binary when a /usr/bin symlink was ticked.
+ */
+function collapseSplitPaths(paths) {
+  var arr = []
+  if (!paths || typeof paths.length !== "number") return arr
+  for (var i = 0; i < paths.length; i++) arr.push(String(paths[i]))
+  var drop = ({})
+  for (var i = 0; i < arr.length; i++) {
+    for (var j = 0; j < arr.length; j++) {
+      if (i === j) continue
+      var longer = arr[i]
+      var shorter = arr[j]
+      if (longer.length <= shorter.length) continue
+      var base = shorter.substring(shorter.lastIndexOf("/") + 1)
+      if (base !== "" && longer.indexOf(base) !== -1) drop[longer] = true
+    }
+  }
+  var out = []
+  for (var i = 0; i < arr.length; i++) {
+    if (!drop[arr[i]]) out.push(arr[i])
+  }
+  return out
+}

@@ -16,6 +16,7 @@ from servers import (  # noqa: E402
     all_cities,
     labels,
     locate,
+    shuffle_server,
     status_known,
     usable,
 )
@@ -56,6 +57,17 @@ CACHE = {
             "Load": 10,
             "Tier": 2,
             "Location": {"Lat": 40.7, "Long": -74.0},
+        },
+        {
+            "Name": "DE#1",
+            "ExitCountry": "DE",
+            "City": "Frankfurt",
+            "Status": 1,
+            "Features": 0,
+            "Score": 4.0,
+            "Load": 30,
+            "Tier": 2,
+            "Location": {"Lat": 50.1, "Long": 8.6},
         },
         {
             "Name": "CH#1",
@@ -102,7 +114,16 @@ class CityTests(unittest.TestCase):
 
     def test_secure_core_not_listed_as_city(self) -> None:
         cities = all_cities(CACHE)
-        self.assertEqual({c["name"] for c in cities}, {"US-NY#1", "CH#1"})
+        self.assertEqual({c["name"] for c in cities}, {"US-NY#1", "CH#1", "DE#1"})
+
+    def test_plus_only_country_is_not_free(self) -> None:
+        cities = all_cities(CACHE)
+        de = [c for c in cities if c["code"] == "DE"]
+        self.assertEqual(len(de), 1)
+        self.assertFalse(de[0]["free"])
+        self.assertEqual(de[0]["tier"], 2)
+        us = [c for c in cities if c["code"] == "US"]
+        self.assertTrue(us[0]["free"])
 
 
 class LocateTests(unittest.TestCase):
@@ -120,6 +141,19 @@ class LocateTests(unittest.TestCase):
 
     def test_missing(self) -> None:
         self.assertEqual(locate(CACHE, "NOPE"), {})
+
+
+class ShuffleTests(unittest.TestCase):
+    def test_free_shuffle_skips_current_and_plus(self) -> None:
+        picked = {shuffle_server(CACHE, "US-NY#1", True)["name"] for _ in range(40)}
+        self.assertTrue(picked)
+        self.assertNotIn("US-NY#1", picked)
+        self.assertNotIn("DE#1", picked)
+        self.assertNotIn("CH-US#3", picked)
+
+    def test_paid_shuffle_can_pick_plus_server(self) -> None:
+        names = {shuffle_server(CACHE, "CH#1", False)["name"] for _ in range(80)}
+        self.assertIn("DE#1", names)
 
 
 if __name__ == "__main__":

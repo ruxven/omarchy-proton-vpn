@@ -9,8 +9,8 @@ import "Model.js" as Model
 
 Panel {
   id: root
-  moduleName: "io.github.vibe.protonvpn"
-  ipcTarget: "io.github.vibe.protonvpn"
+  moduleName: "io.github.iamfitsum.omarchy-proton-vpn"
+  ipcTarget: "io.github.iamfitsum.omarchy-proton-vpn"
   manageIpc: false
 
   // One keyboard cursor walks every section top to bottom. Each section has a
@@ -59,7 +59,7 @@ Panel {
   // App paths Proton's file already holds that the scan no longer finds, kept
   // as options so an app removed from the system can still be unticked.
   readonly property var splitStaleApps: {
-    var chosen = vpn.splitApps
+    var chosen = Model.collapseSplitPaths(vpn.splitApps)
     var out = []
     for (var i = 0; i < chosen.length; i++) {
       var path = String(chosen[i])
@@ -91,15 +91,18 @@ Panel {
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color urgent: bar ? bar.urgent : Color.urgent
-  readonly property color dim: Qt.darker(foreground, 1.55)
+  readonly property color panelBackground: Color.background
+  readonly property color dim: Model.mixInk(foreground, panelBackground, 0.55)
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
 
   readonly property color iconColor: vpn.connected ? foreground : dim
-  readonly property color barIconColor: vpn.connected ? barForeground : Qt.darker(barForeground, 1.55)
+  readonly property color barIconColor: vpn.connected
+                                        ? barForeground
+                                        : Model.mixInk(barForeground, Color.bar.background, 0.55)
 
   readonly property var quickActions: [
     { key: "fastest", label: "Fastest", hint: "Best server for your location", plus: false },
-    { key: "random", label: "Random", hint: "Any available server", plus: false },
+    { key: "random", label: "Random", hint: "Another available server", plus: false },
     { key: "p2p", label: "P2P", hint: "Optimized for file sharing", plus: true },
     { key: "securecore", label: "Secure Core", hint: "Route via a privacy-friendly country", plus: true },
     { key: "tor", label: "Tor", hint: "Tor over VPN", plus: true }
@@ -115,7 +118,7 @@ Panel {
 
   readonly property string heroMeta: {
     if (!vpn.installed) return vpn.installing ? "Installing…" : "Not installed"
-    if (vpn.busy && vpn.pendingLabel !== "") return vpn.pendingLabel
+    if (vpn.pendingLabel !== "") return vpn.pendingLabel
     if (vpn.connected) {
       var server = Model.routeLabel(vpn.displayServer)
       if (server === "") return "Protected"
@@ -144,6 +147,7 @@ Panel {
     if (!vpn.installed) return [{ name: "install", count: 1 }]
     if (!vpn.signedIn) return [{ name: "signin", count: 1 }]
     var list = [{ name: "header", count: 1 }]
+    if (vpn.connected) list.push({ name: "change", count: 1 })
     if (nudgeVisible) list.push({ name: "nudge", count: 2 })
     list.push({ name: "quick", count: quickActions.length })
     list.push({ name: "tabs", count: tabs.length })
@@ -159,6 +163,7 @@ Panel {
 
   function sectionIndex(name) {
     if (name === "nudge") return nudgeIndex
+    if (name === "change") return 0
     if (name === "tabs") return tabIndex
     if (name === "quick") return quickIndex
     if (name === "protection") return protectionIndex
@@ -292,6 +297,7 @@ Panel {
     if (focusSection === "install") vpn.installCli()
     else if (focusSection === "signin") submitSignIn()
     else if (focusSection === "header") vpn.toggle()
+    else if (focusSection === "change") vpn.changeServer()
     else if (focusSection === "nudge") { if (nudgeIndex === 0) requestKillSwitch(); else vpn.dismissNudge() }
     else if (focusSection === "quick") runQuick(quickActions[quickIndex].key)
     else if (focusSection === "tabs") setTab(tabs[tabIndex].key)
@@ -741,6 +747,20 @@ Panel {
             }
           }
 
+          ActionRow {
+            visible: vpn.connected && vpn.signedIn
+            width: parent.width
+            hasCursor: root.cursorActive && root.focusSection === "change"
+            title: "Change server"
+            subtitle: vpn.plusPlan
+                      ? "Connect to another random server"
+                      : "Connect to another random free server"
+            trailing: ""
+            enabled: !vpn.busy
+            onEntered: root.setCursorFromHover("change", 0)
+            onClicked: vpn.changeServer()
+          }
+
           // ── Map ─────────────────────────────────────────────────────────
           WorldMap {
             visible: vpn.signedIn && vpn.cities.length > 0
@@ -749,6 +769,7 @@ Panel {
             current: vpn.currentPlace
             connected: vpn.connected
             foreground: root.foreground
+            background: root.panelBackground
             fontFamily: root.fontFamily
             onCityClicked: function(c) {
               root.drillInto({ code: c.code, name: vpn.countryName(c.code) })
@@ -892,6 +913,7 @@ Panel {
             sessionTx: vpn.sessionTx
             uptimeSec: vpn.uptimeSec
             foreground: root.foreground
+            background: root.panelBackground
             fontFamily: root.fontFamily
           }
 
@@ -1063,7 +1085,7 @@ Panel {
 
               Toggle {
                 width: parent.width
-                label: "NetShield"
+                label: "NetShield · PLUS"
                 description: {
                   var applying = vpn.configPendingLabel("netshield")
                   if (applying !== "") return applying
@@ -1087,7 +1109,7 @@ Panel {
               Toggle {
                 width: parent.width
                 label: "Always On"
-                description: "Reconnects on boot and interruptions"
+                description: "Reconnects on boot and drops, not after you disconnect"
                 checked: vpn.autoConnect
                 enabled: !vpn.busy
                 hasCursor: root.cursorActive && root.focusSection === "protection" && root.protectionIndex === 2
@@ -1099,7 +1121,7 @@ Panel {
 
               Toggle {
                 width: parent.width
-                label: "Port forwarding"
+                label: "Port forwarding · PLUS"
                 description: {
                   var applying = vpn.configPendingLabel("port-forwarding")
                   if (applying !== "") return applying
@@ -1124,7 +1146,7 @@ Panel {
               // would look on and do nothing.
               Toggle {
                 width: parent.width
-                label: "Split tunneling"
+                label: "Split tunneling · PLUS"
                 description: vpn.splitDescription()
                 checked: vpn.splitActive
                 enabled: vpn.splitAvailable && !vpn.splitBlocked
@@ -1185,14 +1207,14 @@ Panel {
               Binding {
                 target: splitAppsRow
                 property: "values"
-                value: vpn.splitApps
+                value: Model.collapseSplitPaths(vpn.splitApps)
               }
 
               Text {
                 visible: root.splitDetailVisible
                 width: parent.width
                 text: "Restart each chosen app after connecting, or it keeps using the tunnel it started on."
-                color: Qt.darker(root.foreground, 1.5)
+                color: root.dim
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
                 wrapMode: Text.WordWrap
@@ -1272,6 +1294,16 @@ Panel {
               textFormat: Text.PlainText
               foreground: root.foreground
               fontFamily: root.fontFamily
+            }
+
+            Text {
+              visible: !root.drilled && !vpn.plusPlan
+              width: parent.width
+              text: "Plus required to pick a country. Free: Fastest, or Change server."
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              wrapMode: Text.WordWrap
             }
 
             BackRow {
@@ -1477,6 +1509,8 @@ Panel {
 
     readonly property bool isCurrent: vpn.connected && vpn.displayServer !== "" && country
                                       && vpn.displayServer.toUpperCase().indexOf(String(country.code).toUpperCase()) === 0
+    readonly property bool needsPlus: country
+                                      && Model.countryNeedsPlus(country.code, vpn.cities, vpn.plusPlan)
 
     hasCursor: root.cursorActive && root.focusSection === "countries" && root.countryIndex === rowIndex
     foreground: root.foreground
@@ -1514,6 +1548,17 @@ Panel {
           font.pixelSize: Style.font.body
           elide: Text.ElideRight
         }
+      }
+
+      Text {
+        visible: countryRow.needsPlus
+        text: "PLUS"
+        textFormat: Text.PlainText
+        color: root.foreground
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.bodySmall
+        font.bold: true
+        Layout.alignment: Qt.AlignVCenter
       }
 
       Text {
@@ -1608,6 +1653,17 @@ Panel {
           elide: Text.ElideRight
         }
       }
+
+      Text {
+        visible: Model.countryNeedsPlus(vpn.serversCountry, vpn.cities, vpn.plusPlan)
+        text: "PLUS"
+        textFormat: Text.PlainText
+        color: root.foreground
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.bodySmall
+        font.bold: true
+        Layout.alignment: Qt.AlignVCenter
+      }
     }
   }
 
@@ -1686,6 +1742,7 @@ Panel {
             // Tier 0 is Proton's free tier, the one thing a free user needs
             // to know before clicking.
             if (serverRow.server.tier === 0) bits.push("Free")
+            else if (!vpn.plusPlan && serverRow.server.tier) bits.push("PLUS")
             var tags = serverRow.server.tags || []
             if (tags.length > 0) bits.push(tags.join(", "))
             return bits.join(" · ")

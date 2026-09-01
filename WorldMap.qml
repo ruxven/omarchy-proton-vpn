@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Shapes
 import qs.Commons
 import "World.js" as World
+import "Model.js" as Model
 
 // Where in the world you are, and where else you could be.
 //
@@ -24,8 +25,9 @@ Item {
   property var current: null
   property bool connected: false
   property color foreground: Color.foreground
+  property color background: Color.background
   property string fontFamily: Style.font.family
-  readonly property color dim: Qt.darker(foreground, 1.55)
+  readonly property color dim: Model.mixInk(foreground, background, 0.55)
   // {code, city, lat, lon} for the Secure Core entry country, or null.
   readonly property var entry: connected && current && current.entry && current.entry.lat !== undefined && current.entry.lat !== null ? current.entry : null
 
@@ -60,8 +62,8 @@ Item {
     transform: Scale { xScale: root.sx; yScale: root.sy }
 
     ShapePath {
-      fillColor: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.10)
-      strokeColor: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.28)
+      fillColor: Model.washInk(root.foreground, root.background, 0.10)
+      strokeColor: Model.washInk(root.foreground, root.background, 0.28)
       strokeWidth: 0.35
       joinStyle: ShapePath.RoundJoin
       fillRule: ShapePath.WindingFill
@@ -185,7 +187,7 @@ Item {
     height: labelText.implicitHeight + Style.space(4)
     radius: Style.cornerRadius > 0 ? Style.space(3) : 0
     color: Style.controlFill(false, true, root.foreground, Color.accent)
-    border.color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.35)
+    border.color: Model.washInk(root.foreground, root.background, 0.35)
     border.width: 1
     x: Math.max(0, Math.min(root.width - width, dotX + 9))
     y: Math.max(0, Math.min(root.height - height, dotY - height / 2))

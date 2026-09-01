@@ -17,10 +17,13 @@ to make.
 Usage: servers.py <COUNTRY_CODE> [limit]   one country's cities, best-first
        servers.py --cities                  every city worldwide, with lat/long
        servers.py --locate <SERVER_NAME>    one server's city and coordinates
+       servers.py --shuffle <SERVER_NAME> [--free]
+                                            another server, for Change server
 Prints compact JSON, or [] / {} when the cache is missing.
 """
 import json
 import os
+import random
 import sys
 
 # Proton's feature bitmask, from proton.vpn.session.servers.enums.
@@ -95,6 +98,7 @@ def all_cities(data):
         score = score if score is not None else 9e9
         key = (code, city)
         entry = out.get(key)
+        free = (s.get("Tier") or 0) == 0
         if entry is None or score < entry["score"]:
             out[key] = {
                 "code": code,
@@ -104,11 +108,14 @@ def all_cities(data):
                 "name": s.get("Name") or "",
                 "load": s.get("Load"),
                 "tier": s.get("Tier"),
+                "free": bool((entry["free"] if entry else False) or free),
                 "score": score,
                 "count": (entry["count"] + 1) if entry else 1,
             }
         else:
             entry["count"] += 1
+            if free:
+                entry["free"] = True
     rows = sorted(out.values(), key=lambda r: (r["code"], r["city"]))
     for r in rows:
         del r["score"]
@@ -164,6 +171,56 @@ def locate(data, name):
     return {}
 
 
+def logicals_as_cache(logicals):
+    """Shape Proton LogicalServer objects like serverlist.json for shuffle_server."""
+    rows = []
+    for server in logicals:
+        features = 0
+        for flag in server.features or []:
+            features |= int(flag)
+        rows.append({
+            "Name": server.name or "",
+            "Status": 1 if server.enabled else 0,
+            "Tier": int(server.tier),
+            "Features": features,
+        })
+    return {"LogicalServers": rows}
+
+
+def location_of(server):
+    """Match the CLI's 'City, Country' / Secure Core 'City, via Entry' line."""
+    has_secure_core = any(int(flag) == SECURE_CORE for flag in (server.features or []))
+    if has_secure_core and server.city:
+        return f"{server.city}, via {server.entry_country_name}"
+    if server.city:
+        country = server.entry_country_name or server.exit_country or ""
+        return f"{server.city}, {country}".rstrip(", ")
+    return server.entry_country_name or server.exit_country or server.name or ""
+
+
+def shuffle_server(data, current, free_only):
+    """Pick a different connectable server, for the Change server row.
+
+    Free plan: another tier-0 server (Proton's desktop app picks at random
+    among free exits). Plus: any regular server except the one we're on.
+    """
+    check_status = status_known(data)
+    want = (current or "").strip().upper()
+    names = []
+    for s in data.get("LogicalServers") or []:
+        if not usable(s, check_status):
+            continue
+        if free_only and (s.get("Tier") or 0) != 0:
+            continue
+        name = s.get("Name") or ""
+        if name == "" or name.upper() == want:
+            continue
+        names.append(name)
+    if not names:
+        return {}
+    return {"name": random.choice(names)}
+
+
 def main():
     if len(sys.argv) < 2:
         print("[]")
@@ -175,6 +232,15 @@ def main():
     if sys.argv[1] == "--locate":
         name = sys.argv[2] if len(sys.argv) > 2 else ""
         print(json.dumps(locate(data, name) if (data and name) else {}, separators=(",", ":")))
+        return
+    if sys.argv[1] == "--shuffle":
+        args = sys.argv[2:]
+        free_only = "--free" in args
+        current = next((a for a in args if a != "--free"), "")
+        print(json.dumps(
+            shuffle_server(data, current, free_only) if data else {},
+            separators=(",", ":"),
+        ))
         return
     if data is None:
         print("[]")

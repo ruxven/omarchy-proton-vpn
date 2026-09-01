@@ -10,7 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from apps import parse_entry, program_of  # noqa: E402
+from apps import expand_paths, parse_entry, program_of  # noqa: E402
 
 
 class ProgramOfTests(unittest.TestCase):
@@ -70,6 +70,26 @@ class ParseEntryTests(unittest.TestCase):
                 encoding="utf-8",
             )
             self.assertIsNone(parse_entry(str(path)))
+
+
+class ExpandPathsTests(unittest.TestCase):
+    def test_adds_realpath_partner_for_symlink(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "real-bin"
+            link = Path(tmp) / "app"
+            target.write_text("#!/bin/sh\n", encoding="utf-8")
+            target.chmod(0o755)
+            link.symlink_to(target)
+            out = expand_paths([str(link)])
+            self.assertEqual(out[0], str(link))
+            self.assertEqual(out[1], str(target.resolve()))
+
+    def test_skips_when_path_is_already_real(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "bin"
+            target.write_text("#!/bin/sh\n", encoding="utf-8")
+            target.chmod(0o755)
+            self.assertEqual(expand_paths([str(target)]), [str(target)])
 
 
 if __name__ == "__main__":
