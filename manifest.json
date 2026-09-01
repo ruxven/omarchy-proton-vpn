@@ -1,0 +1,63 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.vibe.protonvpn",
+  "name": "Proton VPN",
+  "version": "1.0.0",
+  "author": "vibe",
+  "license": "MIT",
+  "description": "Proton VPN for the Omarchy bar: map, country/city picker, Kill Switch, NetShield, Always On, and split tunneling.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "Proton VPN",
+    "description": "Toggle Proton VPN, pick a country or city, and manage Kill Switch, NetShield, Always On and split tunneling.",
+    "category": "Network",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "refreshIntervalSec": 30,
+      "watchIntervalSec": 4,
+      "notifications": "on"
+    },
+    "schema": [
+      {
+        "key": "refreshIntervalSec",
+        "type": "integer",
+        "label": "Status refresh interval (seconds)",
+        "min": 5,
+        "max": 3600,
+        "step": 5,
+        "defaultValue": 30
+      },
+      {
+        "key": "watchIntervalSec",
+        "type": "integer",
+        "label": "Link watch interval (seconds)",
+        "min": 2,
+        "max": 60,
+        "step": 1,
+        "defaultValue": 4
+      },
+      {
+        "key": "notifications",
+        "type": "enum",
+        "label": "Desktop notifications",
+        "options": [
+          {
+            "value": "on",
+            "label": "On"
+          },
+          {
+            "value": "off",
+            "label": "Off"
+          }
+        ],
+        "defaultValue": "on"
+      }
+    ]
+  }
+}
