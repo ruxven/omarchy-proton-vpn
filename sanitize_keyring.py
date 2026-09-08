@@ -92,16 +92,39 @@ def keyring_dir() -> Path:
     return Path.home() / ".local/share/keyrings"
 
 
+def get_keyring_path(name: str | None = None) -> Path:
+    """Return the path to the keyring file, resolving alias if needed."""
+    directory = keyring_dir()
+    if name:
+        return directory / f"{name}.keyring"
+
+    alias = directory / "default"
+    if alias.is_file():
+        name = alias.read_text(encoding="utf-8").strip()
+        return directory / f"{name}.keyring"
+
+    # Fallback: look for any .keyring file, prioritizing 'Default_Keyring'
+    candidates = list(directory.glob("*.keyring"))
+    if not candidates:
+        return directory / "Default_Keyring.keyring"
+
+    # Try case-insensitive match for Default_Keyring
+    for c in candidates:
+        if c.stem.lower() == "default_keyring":
+            return c
+
+    return candidates[0]
+
+
 def persist_session() -> bool:
-    """Sanitize Default_keyring.keyring and pin the default alias to it.
+    """Sanitize the active keyring and pin the default alias to it.
 
     No-ops if the passwordless INI is missing. Does not create keyrings,
     restart gnome-keyring, or move Chrome stores. Returns True if the INI
     or alias file changed.
     """
-    directory = keyring_dir()
-    ini = directory / "Default_keyring.keyring"
-    alias = directory / "default"
+    ini = get_keyring_path()
+    alias = keyring_dir() / "default"
     if not ini.is_file():
         return False
     try:
@@ -111,7 +134,7 @@ def persist_session() -> bool:
     if not head.lstrip().startswith("["):
         return False
     changed = sanitize_keyring_file(ini)
-    wanted = "Default_keyring\n"
+    wanted = f"{ini.stem}\n"
     current = alias.read_text(encoding="utf-8") if alias.is_file() else ""
     if current != wanted:
         alias.write_text(wanted, encoding="utf-8")
@@ -127,7 +150,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--persist",
         action="store_true",
-        help="sanitize Default_keyring.keyring and pin the default alias",
+        help="sanitize the active keyring and pin the default alias",
     )
     args = parser.parse_args(argv)
     if args.persist:
