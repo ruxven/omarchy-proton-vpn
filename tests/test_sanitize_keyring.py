@@ -101,13 +101,15 @@ class SanitizeKeyringTests(unittest.TestCase):
             keyring_dir.mkdir()
             ini = keyring_dir / "Default_keyring.keyring"
             ini.write_text(CORRUPT, encoding="utf-8")
-            (keyring_dir / "default").write_text("Default\n", encoding="utf-8")
+            (keyring_dir / "default").write_text("Default_keyring\n", encoding="utf-8")
             os.environ["PROTONVPN_KEYRING_DIR"] = str(keyring_dir)
+            os.environ["TESTING"] = "1"
             try:
                 self.assertTrue(persist_session())
                 self.assertFalse(persist_session())
             finally:
                 del os.environ["PROTONVPN_KEYRING_DIR"]
+                del os.environ["TESTING"]
             body = ini.read_text(encoding="utf-8")
             self.assertIn("\\nMCow", body)
             self.assertNotIn("\nMCow", body)

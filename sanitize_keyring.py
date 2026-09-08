@@ -5,8 +5,8 @@ Proton stores JSON+PEM in the unencrypted keyring. Literal newlines in
 those secrets make gnome-keyring reject the whole file, after which Chrome
 creates a new encrypted 'Default' keyring and prompts for a password.
 
-`--persist` sanitizes Omarchy's passwordless INI (if it exists) and pins
-the `default` alias to it. It does not create keyrings, restart the
+--persist sanitizes Omarchy's passwordless INI (if it exists) and pins
+the default alias to it. It does not create keyrings, restart the
 daemon, or quarantine Chrome stores.
 """
 
@@ -14,7 +14,10 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
+import tempfile
+import subprocess
 from pathlib import Path
 
 KNOWN_KEYS = (
@@ -69,18 +72,61 @@ def sanitize_keyring_text(text: str) -> str:
     return result
 
 
+def get_keyring_collection_path(keyring_name: str) -> str | None:
+    """Dynamically resolve the D-Bus object path for a keyring collection."""
+    try:
+        # List all collections to find the matching one
+        output = subprocess.check_output(
+            ["busctl", "--user", "tree", "org.freedesktop.secrets"],
+            text=True,
+            stderr=subprocess.DEVNULL
+        )
+        # Escape the keyring name as it might appear in the D-Bus path (e.g., _ -> _5f)
+        escaped_name = keyring_name.replace("_", "_5f")
+        pattern = re.compile(rf"/org/freedesktop/secrets/collection/{escaped_name}")
+        for line in output.splitlines():
+            match = pattern.search(line)
+            if match:
+                return match.group(0)
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        pass
+    return None
+
 def sanitize_keyring_file(path: Path) -> bool:
-    """Rewrite an INI keyring in place. Returns True if the file changed."""
+    """Rewrite an INI keyring atomically. Returns True if the file changed."""
     if not path.is_file():
         return False
+
+    # Dynamically find the D-Bus path for the keyring collection being sanitized
+    collection_path = get_keyring_collection_path(path.stem)
+
+    if collection_path and not os.environ.get("TESTING"):
+        # Check if the keyring is locked
+        try:
+            res = subprocess.run(
+                ["busctl", "--user", "get-property", "org.freedesktop.secrets", 
+                 collection_path, 
+                 "org.freedesktop.Secret.Collection", "Locked"],
+                capture_output=True, text=True, check=True
+            )
+            if "true" in res.stdout:
+                return False # Keyring is locked, do not attempt to sanitize
+        except subprocess.CalledProcessError:
+            pass # Proceed if we cannot check
+
     original = path.read_text(encoding="utf-8")
     if not original.lstrip().startswith("["):
         return False
     sanitized = sanitize_keyring_text(original)
     if sanitized == original:
         return False
-    path.write_text(sanitized, encoding="utf-8")
-    path.chmod(0o600)
+
+    # Atomic write using a temporary file
+    tmp_path = path.with_suffix(".keyring.tmp")
+    tmp_path.write_text(sanitized, encoding="utf-8")
+    tmp_path.chmod(0o600)
+    os.replace(tmp_path, path)
+
     return True
 
 
