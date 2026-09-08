@@ -1075,7 +1075,6 @@ Item {
     // you've been connecting, which is nobody else's business on a shared box.
     Quickshell.execDetached(["install", "-d", "-m", "700", stateDir])
     Quickshell.execDetached(["cp", "-n", legacyStateDir + "/state.json", statePath])
-    persistSession(true)
     refresh()
   }
 
@@ -1391,8 +1390,8 @@ Item {
       root.account = info.account
       root.plan = info.plan
       if (info.signedIn) {
-        root.persistSession(!was)
         if (!was) {
+          persistSession(true)
           root.loadCountries(true)
           root.loadConfig()
         }
